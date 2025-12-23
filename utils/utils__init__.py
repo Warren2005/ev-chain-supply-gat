@@ -5,5 +5,6 @@ This package contains data collection, processing, and graph construction utilit
 """
 
 from .market_data import MarketDataCollector
+from .macro_data import MacroDataCollector
 
-__all__ = ['MarketDataCollector']
+__all__ = ['MarketDataCollector', 'MacroDataCollector']
