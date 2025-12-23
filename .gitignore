@@ -1,0 +1,181 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv
+.env/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# PyCharm
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Spyder
+.spyderproject
+.spyproject
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# Data Files (large files that shouldn't be in git)
+data/raw/**
+data/processed/**
+data/graphs/**
+*.csv
+*.json
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.parquet
+*.feather
+
+# IMPORTANT: Keep directory structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/graphs/.gitkeep
+!data/**/README.md
+
+# Model Checkpoints (large files)
+results/checkpoints/**
+*.pt
+*.pth
+*.ckpt
+*.weights
+*.pb
+!results/checkpoints/.gitkeep
+
+# Logs
+*.log
+logs/
+wandb/
+mlruns/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Testing
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# pytype
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+.temp/
+temp/
+
+# Compiled files
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Documentation builds
+docs/_build/
+site/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Misc
+*.orig
