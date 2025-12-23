@@ -133,7 +133,12 @@ class MarketDataCollector:
                 
                 # Reset index to make date a column
                 df.reset_index(inplace=True)
-                df.rename(columns={'index': 'date'}, inplace=True)
+                # yfinance names the index 'Date', so rename it to lowercase 'date'
+                if 'Date' in df.columns:
+                    df.rename(columns={'Date': 'date'}, inplace=True)
+                elif 'date' not in df.columns:
+                    # If neither 'Date' nor 'date' exists, the first column should be the date
+                    df.rename(columns={df.columns[0]: 'date'}, inplace=True)
                 
                 # Select and order relevant columns
                 columns_to_keep = ['date', 'open', 'high', 'low', 'close', 'volume']
