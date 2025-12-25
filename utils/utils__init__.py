@@ -9,11 +9,13 @@ from .macro_data import MacroDataCollector
 from .sec_downloader import SECFilingDownloader
 from .relationship_extractor import RelationshipExtractor
 from .feature_engineering import FeatureEngineer
+from .graph_builder import GraphBuilder
 
 __all__ = [
     'MarketDataCollector',
     'MacroDataCollector', 
     'SECFilingDownloader',
     'RelationshipExtractor',
-    'FeatureEngineer'  # Add this
+    'FeatureEngineer', 
+    'GraphBuilder'    # Add this
 ]

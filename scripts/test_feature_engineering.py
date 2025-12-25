@@ -8,7 +8,7 @@ Run this script to test before running full feature calculation.
 
 import sys
 from pathlib import Path
-
+import pandas as pd
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -54,7 +54,23 @@ def main():
         sample_df = results[sample_ticker]
         
         print(f"\n✓ Sample features for {sample_ticker}:")
-        print(sample_df[['date', 'ticker', 'log_return', 'realized_vol', 'garch_vol', 'volume_shock', 'rsi']].head(10))
+        print(f"Total columns: {len(sample_df.columns)}")
+        
+        # Show first 10 rows of all columns (will wrap)
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', None)
+        print(sample_df.head(10))
+        
+        # Show summary of macro features
+        macro_cols = [col for col in sample_df.columns 
+                     if col not in ['date', 'ticker', 'close', 'volume', 
+                                   'log_return', 'realized_vol', 'garch_vol', 
+                                   'volume_shock', 'rsi']]
+        if macro_cols:
+            print(f"\n✓ Macro features included: {', '.join(macro_cols)}")
+            # Show a sample macro value
+            print(f"\nSample macro values (row 20):")
+            print(sample_df.loc[20, macro_cols])
         
         # Validate one stock
         is_valid, issues = engineer.validate_features(sample_df, sample_ticker)

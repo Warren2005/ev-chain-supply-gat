@@ -25,6 +25,9 @@ import numpy as np
 from tqdm import tqdm
 from arch import arch_model
 
+from sklearn.preprocessing import StandardScaler
+import pickle
+
 
 class FeatureEngineer:
     """
@@ -46,6 +49,14 @@ class FeatureEngineer:
     # Feature calculation parameters
     VOLATILITY_WINDOW = 20  # Rolling window for realized volatility
     MIN_PERIODS = 10        # Minimum periods for rolling calculations
+    
+    # Date splits (from Phase 1 design)
+    TRAIN_START = "2018-01-01"
+    TRAIN_END = "2021-12-31"
+    VAL_START = "2022-01-01"
+    VAL_END = "2022-12-31"
+    TEST_START = "2023-01-01"
+    TEST_END = "2024-06-30"
     
     def __init__(
         self,
@@ -139,7 +150,417 @@ class FeatureEngineer:
         except Exception as e:
             self.logger.error(f"Error loading {ticker}: {str(e)}")
             return None
+        
+    def load_macro_data(self) -> Optional[pd.DataFrame]:
+        """
+        Load combined macro indicators.
+        
+        Returns:
+            DataFrame with macro features, or None if loading fails
+        """
+        try:
+            filepath = self.macro_data_dir / "macro_indicators.csv"
+            
+            if not filepath.exists():
+                self.logger.error(f"Macro data file not found: {filepath}")
+                self.logger.error("Please run: python scripts/download_macro_data.py")
+                return None
+            
+            df = pd.read_csv(filepath)
+            
+            # Ensure date column is datetime
+            df['date'] = pd.to_datetime(df['date'], utc=True).dt.tz_localize(None)
+            
+            # Sort by date
+            df.sort_values('date', inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            
+            self.logger.info(f"Loaded macro data: {len(df)} rows, {len(df.columns)-1} indicators")
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Error loading macro data: {str(e)}")
+            return None
+
+    def align_macro_features(
+        self,
+        stock_df: pd.DataFrame,
+        macro_df: pd.DataFrame,
+        max_forward_fill: int = 5
+    ) -> pd.DataFrame:
+        """
+        Align macro features with stock trading dates.
+        
+        Macro indicators (VIX, yields) aren't published on all trading days,
+        so we merge and forward-fill missing values.
+        
+        Args:
+            stock_df: Stock features DataFrame with 'date' column
+            macro_df: Macro indicators DataFrame with 'date' column
+            max_forward_fill: Maximum days to forward fill (default: 5)
+        
+        Returns:
+            DataFrame with stock and macro features combined
+        """
+        df = stock_df.copy()
+        macro_copy = macro_df.copy()
+        
+        try:
+            # CRITICAL FIX: Normalize dates to date-only (remove time component)
+            df['date_only'] = df['date'].dt.normalize()
+            macro_copy['date_only'] = macro_copy['date'].dt.normalize()
+            
+            # Merge on date_only instead of date
+            merged = pd.merge(
+                df,
+                macro_copy.drop(columns=['date']),  # Drop original date, keep date_only
+                on='date_only',
+                how='left'
+            )
+            
+            # Drop the temporary date_only column
+            merged.drop(columns=['date_only'], inplace=True)
+            
+            # Get macro column names (everything except date and stock columns)
+            stock_cols = set(stock_df.columns)
+            macro_cols = [col for col in merged.columns if col not in stock_cols and col != 'date']
+            
+            # Forward fill macro values (they change slowly)
+            # Limit forward fill to prevent stale data
+            for col in macro_cols:
+                merged[col] = merged[col].ffill(limit=max_forward_fill)
+            
+            self.logger.debug(
+                f"Aligned macro features: {len(macro_cols)} indicators "
+                f"across {len(merged)} dates"
+            )
+            
+            # Check for remaining NaN in macro columns
+            for col in macro_cols:
+                nan_count = merged[col].isna().sum()
+                if nan_count > 0:
+                    self.logger.warning(
+                        f"Macro feature '{col}' has {nan_count} NaN values after alignment"
+                    )
+            
+            return merged
+            
+        except Exception as e:
+            self.logger.error(f"Error aligning macro features: {str(e)}")
+            return df
     
+    def create_temporal_splits(
+        self,
+        df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Split data into train/val/test sets temporally.
+        
+        This respects the time series nature - no random splitting.
+        
+        Args:
+            df: Combined features DataFrame with 'date' column
+        
+        Returns:
+            Tuple of (train_df, val_df, test_df)
+        """
+        # Ensure date is datetime
+        df['date'] = pd.to_datetime(df['date'])
+        
+        # Split by date ranges
+        train = df[
+            (df['date'] >= self.TRAIN_START) & 
+            (df['date'] <= self.TRAIN_END)
+        ].copy()
+        
+        val = df[
+            (df['date'] >= self.VAL_START) & 
+            (df['date'] <= self.VAL_END)
+        ].copy()
+        
+        test = df[
+            (df['date'] >= self.TEST_START) & 
+            (df['date'] <= self.TEST_END)
+        ].copy()
+        
+        self.logger.info(
+            f"Split data: Train={len(train)} rows, "
+            f"Val={len(val)} rows, Test={len(test)} rows"
+        )
+        
+        return train, val, test
+    
+    def fit_normalizer(
+        self,
+        train_df: pd.DataFrame,
+        features_to_normalize: List[str] = None
+    ) -> StandardScaler:
+        """
+        Fit StandardScaler on training data only.
+        
+        CRITICAL: This prevents data leakage by fitting only on train set.
+        
+        Args:
+            train_df: Training data
+            features_to_normalize: List of feature names to normalize
+                If None, normalizes all numeric columns except date/ticker
+        
+        Returns:
+            Fitted StandardScaler
+        """
+        # Default: normalize all numeric features except identifiers
+        if features_to_normalize is None:
+            exclude_cols = ['date', 'ticker', 'close', 'volume']
+            features_to_normalize = [
+                col for col in train_df.columns 
+                if col not in exclude_cols and 
+                pd.api.types.is_numeric_dtype(train_df[col])
+            ]
+        
+        self.logger.info(f"Fitting normalizer on {len(features_to_normalize)} features")
+        
+        # Extract feature values from training data
+        train_values = train_df[features_to_normalize].values
+        
+        # Fit scaler
+        scaler = StandardScaler()
+        scaler.fit(train_values)
+        
+        self.logger.info(
+            f"Normalizer fitted on {len(train_df)} training samples"
+        )
+        
+        # Store feature names for later reference
+        scaler.feature_names_ = features_to_normalize
+        
+        return scaler
+    
+    def transform_features(
+        self,
+        df: pd.DataFrame,
+        scaler: StandardScaler,
+        suffix: str = "_norm"
+    ) -> pd.DataFrame:
+        """
+        Normalize features using fitted scaler.
+        
+        Args:
+            df: DataFrame to normalize
+            scaler: Fitted StandardScaler
+            suffix: Suffix to add to normalized column names (default: "_norm")
+        
+        Returns:
+            DataFrame with normalized features added
+        """
+        result = df.copy()
+        
+        try:
+            # Get feature names from scaler
+            features = scaler.feature_names_
+            
+            # Extract values
+            values = result[features].values
+            
+            # Transform
+            normalized_values = scaler.transform(values)
+            
+            # Add normalized columns
+            for i, feature in enumerate(features):
+                result[f"{feature}{suffix}"] = normalized_values[:, i]
+            
+            self.logger.debug(
+                f"Normalized {len(features)} features for {len(result)} rows"
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error normalizing features: {str(e)}")
+        
+        return result
+    
+    def save_normalizer(
+        self,
+        scaler: StandardScaler,
+        filename: str = "feature_scaler.pkl"
+    ) -> bool:
+        """
+        Save fitted scaler for later use.
+        
+        Args:
+            scaler: Fitted StandardScaler
+            filename: Output filename
+        
+        Returns:
+            True if save successful
+        """
+        try:
+            filepath = self.output_dir / filename
+            
+            with open(filepath, 'wb') as f:
+                pickle.dump(scaler, f)
+            
+            self.logger.info(f"Saved normalizer to {filepath}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error saving normalizer: {str(e)}")
+            return False
+    
+    def load_normalizer(
+        self,
+        filename: str = "feature_scaler.pkl"
+    ) -> Optional[StandardScaler]:
+        """
+        Load fitted scaler.
+        
+        Args:
+            filename: Scaler filename
+        
+        Returns:
+            Loaded StandardScaler, or None if loading fails
+        """
+        try:
+            filepath = self.output_dir / filename
+            
+            if not filepath.exists():
+                self.logger.error(f"Scaler file not found: {filepath}")
+                return None
+            
+            with open(filepath, 'rb') as f:
+                scaler = pickle.load(f)
+            
+            self.logger.info(f"Loaded normalizer from {filepath}")
+            return scaler
+            
+        except Exception as e:
+            self.logger.error(f"Error loading normalizer: {str(e)}")
+            return None
+
+    def process_and_normalize_all(
+        self,
+        ticker_list: List[str],
+        save_splits: bool = True
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Complete pipeline: process features, split, and normalize.
+        
+        This is the main method to prepare data for model training.
+        
+        Args:
+            ticker_list: List of tickers to process
+            save_splits: Whether to save train/val/test splits separately
+        
+        Returns:
+            Dictionary with 'train', 'val', 'test' DataFrames
+        """
+        # Step 1: Process all stock features
+        self.logger.info("=" * 60)
+        self.logger.info("STEP 1: Processing stock features")
+        self.logger.info("=" * 60)
+        
+        features_dict = self.process_all_stocks(ticker_list)
+        
+        if not features_dict:
+            self.logger.error("No features processed. Aborting.")
+            return {}
+        
+        # Step 2: Combine all stocks
+        self.logger.info("\n" + "=" * 60)
+        self.logger.info("STEP 2: Combining all stocks")
+        self.logger.info("=" * 60)
+        
+        all_features = pd.concat(
+            features_dict.values(),
+            ignore_index=True
+        )
+        all_features.sort_values(['ticker', 'date'], inplace=True)
+        
+        self.logger.info(
+            f"Combined {len(features_dict)} stocks: "
+            f"{len(all_features)} total rows"
+        )
+        
+        # Step 3: Create temporal splits
+        self.logger.info("\n" + "=" * 60)
+        self.logger.info("STEP 3: Creating temporal splits")
+        self.logger.info("=" * 60)
+        
+        train_df, val_df, test_df = self.create_temporal_splits(all_features)
+        
+        # Step 4: Fit normalizer on training data
+        self.logger.info("\n" + "=" * 60)
+        self.logger.info("STEP 4: Fitting normalizer (train data only)")
+        self.logger.info("=" * 60)
+        
+        scaler = self.fit_normalizer(train_df)
+        self.save_normalizer(scaler)
+        
+        # Step 5: Normalize all splits
+        self.logger.info("\n" + "=" * 60)
+        self.logger.info("STEP 5: Normalizing all splits")
+        self.logger.info("=" * 60)
+        
+        train_normalized = self.transform_features(train_df, scaler)
+        val_normalized = self.transform_features(val_df, scaler)
+        test_normalized = self.transform_features(test_df, scaler)
+        
+        # Step 6: Save splits
+        if save_splits:
+            self.logger.info("\n" + "=" * 60)
+            self.logger.info("STEP 6: Saving normalized splits")
+            self.logger.info("=" * 60)
+            
+            train_normalized.to_parquet(
+                self.output_dir / "train_features.parquet",
+                index=False
+            )
+            val_normalized.to_parquet(
+                self.output_dir / "val_features.parquet",
+                index=False
+            )
+            test_normalized.to_parquet(
+                self.output_dir / "test_features.parquet",
+                index=False
+            )
+            
+            self.logger.info("Saved all splits to Parquet")
+        
+        # Print final summary
+        self._print_normalization_summary(train_normalized, val_normalized, test_normalized)
+        
+        return {
+            'train': train_normalized,
+            'val': val_normalized,
+            'test': test_normalized
+        }
+    
+    def _print_normalization_summary(
+        self,
+        train_df: pd.DataFrame,
+        val_df: pd.DataFrame,
+        test_df: pd.DataFrame
+    ) -> None:
+        """Print summary of normalized data."""
+        print("\n" + "="*60)
+        print("NORMALIZATION SUMMARY")
+        print("="*60)
+        
+        # Count normalized features
+        norm_cols = [col for col in train_df.columns if col.endswith('_norm')]
+        
+        print(f"Normalized features: {len(norm_cols)}")
+        print(f"\nDataset sizes:")
+        print(f"  Train: {len(train_df)} rows ({train_df['ticker'].nunique()} stocks)")
+        print(f"  Val:   {len(val_df)} rows ({val_df['ticker'].nunique()} stocks)")
+        print(f"  Test:  {len(test_df)} rows ({test_df['ticker'].nunique()} stocks)")
+        
+        # Show sample statistics
+        print(f"\nNormalized feature statistics (train set):")
+        sample_features = norm_cols[:3]  # Show first 3
+        print(train_df[sample_features].describe())
+        
+        print("="*60 + "\n")
+        
+            
     def calculate_log_returns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate log returns from close prices.
@@ -394,18 +815,25 @@ class FeatureEngineer:
         
         return df
     
-    def calculate_basic_features(self, ticker: str) -> Optional[pd.DataFrame]:
+    def calculate_basic_features(
+        self,
+        ticker: str,
+        include_macro: bool = True
+    ) -> Optional[pd.DataFrame]:
         """
         Calculate basic stock-specific features for a single ticker.
         
         This method orchestrates the calculation of:
         - Log returns
         - Realized volatility
-        
-        Additional features (GARCH, volume shock, RSI) will be added in later steps.
+        - GARCH volatility
+        - Volume shock
+        - RSI
+        - Macro features (optional)
         
         Args:
             ticker: Stock ticker symbol
+            include_macro: Whether to include macro features (default: True)
         
         Returns:
             DataFrame with calculated features, or None if calculation fails
@@ -424,8 +852,8 @@ class FeatureEngineer:
             if missing_cols:
                 self.logger.error(f"{ticker}: Missing columns {missing_cols}")
                 return None
-
-            # Calculate features
+            
+            # Calculate stock-specific features
             df = self.calculate_log_returns(df)
             df = self.calculate_realized_volatility(df)
             df = self.calculate_garch_volatility(df)
@@ -435,17 +863,34 @@ class FeatureEngineer:
             # Add ticker column for tracking
             df['ticker'] = ticker
             
-            # Select relevant columns
-            feature_cols = [
+            # Align with macro features if requested
+            if include_macro:
+                macro_df = self.load_macro_data()
+                if macro_df is not None:
+                    df = self.align_macro_features(df, macro_df)
+                else:
+                    self.logger.warning(
+                        f"Macro data not available for {ticker}. "
+                        "Proceeding with stock features only."
+                    )
+            
+            # Select relevant columns (stock + macro if available)
+            base_cols = [
                 'date', 'ticker', 'close', 'volume',
                 'log_return', 'realized_vol', 'garch_vol',
                 'volume_shock', 'rsi'
             ]
+            
+            # Add any macro columns that exist
+            macro_cols = [col for col in df.columns if col not in base_cols]
+            feature_cols = base_cols + macro_cols
+            
             df = df[feature_cols]
             
             self.logger.info(
                 f"Successfully calculated features for {ticker}: "
-                f"{len(df)} rows, {len(feature_cols)} columns"
+                f"{len(df)} rows, {len(feature_cols)} columns "
+                f"({len(macro_cols)} macro features)"
             )
             
             return df
@@ -477,7 +922,10 @@ class FeatureEngineer:
         self.processing_stats = {
             "stocks_processed": [],
             "stocks_failed": [],
-            "features_calculated": ['log_return', 'realized_vol', 'garch_vol', 'volume_shock', 'rsi']
+            "features_calculated": [
+                'log_return', 'realized_vol', 'garch_vol', 
+                'volume_shock', 'rsi', 'macro_features'
+            ]
         }
         
         # Process each stock with progress bar
