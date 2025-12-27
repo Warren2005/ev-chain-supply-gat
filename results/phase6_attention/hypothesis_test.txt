@@ -1,0 +1,12 @@
+HYPOTHESIS TEST RESULTS
+======================================================================
+
+Hypothesis: Attention entropy increases before volatility events
+
+Mean entropy before events: 0.9473
+Mean entropy (normal):      0.9476
+Difference:                 -0.0003
+t-statistic:                -1.3012
+p-value:                    0.1936
+
+Result: NOT SIGNIFICANT

@@ -122,62 +122,94 @@ class GATLayer(nn.Module):
         
         return logger
     
-    def forward(
-        self,
-        x: torch.Tensor,
-        edge_index: torch.Tensor
-    ) -> torch.Tensor:
+    def _prepare_attentional_mechanism_input(
+    self,
+    Wh: torch.Tensor,
+    edge_index: torch.Tensor
+) -> torch.Tensor:
         """
-        Forward pass through the GAT layer.
+        Prepare input for attention mechanism by concatenating source and target features.
+        
+        For each edge (i -> j), concatenates [Wh_i || Wh_j].
+        
+        Args:
+            Wh: Transformed node features [num_nodes, out_features]
+            edge_index: Graph connectivity [2, num_edges]
+        
+        Returns:
+            Concatenated features for attention [num_edges, 2*out_features]
+        """
+        source_nodes = edge_index[0]  # [num_edges]
+        target_nodes = edge_index[1]  # [num_edges]
+        
+        # Get source and target features
+        Wh_source = Wh[source_nodes]  # [num_edges, out_features]
+        Wh_target = Wh[target_nodes]  # [num_edges, out_features]
+        
+        # Concatenate [Wh_i || Wh_j]
+        a_input = torch.cat([Wh_source, Wh_target], dim=1)  # [num_edges, 2*out_features]
+        
+        return a_input
+
+
+    def forward(
+    self,
+    x: torch.Tensor,
+    edge_index: torch.Tensor,
+    return_attention: bool = False
+) -> torch.Tensor:
+        """
+        Forward pass through GAT layer.
         
         Args:
             x: Node features [num_nodes, in_features]
-            edge_index: Graph connectivity [2, num_edges] where edge_index[0] are source nodes
-                       and edge_index[1] are target nodes
+            edge_index: Graph connectivity [2, num_edges]
+            return_attention: If True, return (output, attention_weights)
         
         Returns:
             Updated node features [num_nodes, out_features]
+            If return_attention=True: (features, attention_weights)
         """
-        # Step 1: Linear transformation
-        # h' = W * h
-        h = self.W(x)  # [num_nodes, out_features]
-        num_nodes = h.size(0)
+        num_nodes = x.size(0)
         
-        # Step 2: Compute attention coefficients
-        # e_ij = LeakyReLU(a^T [h_i' || h_j'])
+        # Linear transformation
+        Wh = self.W(x)  # [num_nodes, out_features]
         
-        # Get source and target node indices
-        edge_src = edge_index[0]  # Source nodes (suppliers)
-        edge_dst = edge_index[1]  # Target nodes (customers)
+        # Prepare for attention computation
+        a_input = self._prepare_attentional_mechanism_input(Wh, edge_index)
         
-        # Get transformed features for source and target nodes
-        h_src = h[edge_src]  # [num_edges, out_features]
-        h_dst = h[edge_dst]  # [num_edges, out_features]
+        # Compute attention coefficients (FIXED: use matmul, not call)
+        e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(-1))  # [num_edges]
         
-        # Concatenate source and target features
-        h_concat = torch.cat([h_src, h_dst], dim=1)  # [num_edges, 2 * out_features]
+        # Extract node indices from edge_index
+        source_nodes = edge_index[0]
+        target_nodes = edge_index[1]
         
-        # Compute attention logits
-        e = self.leakyrelu(torch.matmul(h_concat, self.a).squeeze(1))  # [num_edges]
+        # Apply softmax per target node
+        attention = self._softmax_per_node(e, target_nodes, num_nodes)
         
-        # Step 3: Normalize attention coefficients using softmax per target node
-        # α_ij = softmax_j(e_ij) for all edges pointing to node i
-        attention = self._softmax_per_node(e, edge_dst, num_nodes)  # [num_edges]
+        # Store attention weights for extraction
+        self.attention_weights = attention.detach()
         
-        # Apply dropout to attention coefficients
-        attention = self.dropout_layer(attention)
+        # Apply dropout
+        attention_dropped = F.dropout(attention, self.dropout, training=self.training)
         
-        # Step 4: Aggregate neighbor features using attention weights
-        # h_i_new = Σ_j α_ij * h_j'
-        h_prime = self._aggregate_neighbors(h, edge_src, edge_dst, attention, num_nodes)
+        # Aggregate neighbor features
+        h_prime = self._aggregate_neighbors(
+            Wh, source_nodes, target_nodes, attention_dropped, num_nodes
+        )
         
-        # Step 5: Apply activation function
+        # Activation
         if self.concat:
-            # ELU activation for intermediate layers
-            return F.elu(h_prime)
+            output = F.elu(h_prime)
         else:
-            # No activation for final layer
-            return h_prime
+            output = h_prime
+        
+        # Return attention if requested
+        if return_attention:
+            return output, attention
+        
+        return output
     
     def _softmax_per_node(
         self,
