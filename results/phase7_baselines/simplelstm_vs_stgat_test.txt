@@ -1,0 +1,29 @@
+SIMPLELSTM vs ST-GAT SIGNIFICANCE TEST
+======================================================================
+
+R² Score Comparison:
+  SimpleLSTM mean: 0.6688
+  ST-GAT mean: -1.5004
+  Difference: 2.1692
+  t-statistic: 3.4146
+  p-value: 0.014238
+  Cohen's d: 1.7107
+  Significant: YES
+
+RMSE Comparison:
+  SimpleLSTM mean: 0.1985
+  ST-GAT mean: 0.4635
+  Difference: 0.2650
+  t-statistic: 3.4196
+  p-value: 0.014150
+  Cohen's d: 1.9436
+  Significant: YES
+
+Directional Accuracy Comparison:
+  SimpleLSTM mean: 91.20%
+  ST-GAT mean: 86.52%
+  Difference: 4.68%
+  t-statistic: 2.1997
+  p-value: 0.070134
+  Cohen's d: 0.6320
+  Significant: NO
